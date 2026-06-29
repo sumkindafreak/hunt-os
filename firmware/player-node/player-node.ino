@@ -1,15 +1,7 @@
 /*
   HUNT Player Node v0.1
-
-  Purpose:
-  - Boots an ESP32-C3 Player Node.
-  - Shows clear serial debug messages.
-  - Tests button, RGB LED and buzzer.
-  - Builds and parses HUNT protocol packets.
-  - Receives ESP-NOW packets from Base Nodes.
-
-  Required libraries:
-  - Arduino core for ESP32
+  Bootable ESP32-C3 Player firmware spine with ESP-NOW, HUNT protocol,
+  player state management and notifications.
 */
 
 #include <Arduino.h>
@@ -18,11 +10,19 @@
 #include "../shared/HuntDebug.h"
 #include "../shared/HuntProtocol.h"
 #include "../shared/HuntEspNow.h"
+#include "../shared/HuntEvents.h"
+#include "../shared/HuntPlayerState.h"
+#include "../shared/HuntNotifications.h"
 
-// =====================================================
-// Player state variables
-// =====================================================
-HuntPlayerState playerState = PLAYER_ALIVE;
+// Arduino IDE compatibility: include shared implementations directly for now.
+#include "../shared/HuntProtocol.cpp"
+#include "../shared/HuntEspNow.cpp"
+#include "../shared/HuntPlayerState.cpp"
+#include "../shared/HuntNotifications.cpp"
+
+HuntPlayerStateManager playerManager;
+HuntNotificationManager notificationManager;
+
 unsigned long lastHeartbeatMs = 0;
 unsigned long lastButtonChangeMs = 0;
 unsigned long buttonPressStartMs = 0;
@@ -30,9 +30,6 @@ bool lastButtonReading = HIGH;
 bool buttonPressed = false;
 int currentScreen = 0;
 
-// =====================================================
-// RGB LED helper
-// =====================================================
 void setRgbRaw(bool redOn, bool greenOn, bool blueOn) {
   if (RGB_COMMON_ANODE) {
     digitalWrite(RGB_RED_PIN, redOn ? LOW : HIGH);
@@ -46,25 +43,13 @@ void setRgbRaw(bool redOn, bool greenOn, bool blueOn) {
 }
 
 void showPlayerStateOnLed() {
-  switch (playerState) {
-    case PLAYER_ALIVE:
-      setRgbRaw(false, true, false); // Green
-      break;
-    case PLAYER_INFECTED:
-      setRgbRaw(true, false, true); // Purple
-      break;
-    case PLAYER_SAFE:
-      setRgbRaw(false, false, true); // Blue
-      break;
-    case PLAYER_ELIMINATED:
-      setRgbRaw(true, false, false); // Red
-      break;
-  }
+  HuntPlayerState state = playerManager.getState();
+  if (state == PLAYER_ALIVE) setRgbRaw(false, true, false);
+  if (state == PLAYER_INFECTED) setRgbRaw(true, false, true);
+  if (state == PLAYER_SAFE) setRgbRaw(false, false, true);
+  if (state == PLAYER_ELIMINATED) setRgbRaw(true, false, false);
 }
 
-// =====================================================
-// Buzzer helpers
-// =====================================================
 void beepConfirm() {
   digitalWrite(BUZZER_PIN, HIGH);
   delay(70);
@@ -78,16 +63,7 @@ void beepAlert() {
     digitalWrite(BUZZER_PIN, LOW);
     delay(60);
   }
-}
-
-// =====================================================
-// Display placeholder
-// =====================================================
-void updateDisplay() {
-  // OLED support will be added after confirming the exact onboard OLED driver and pins.
-  // For now, the Serial Monitor is the official v0.1 display output.
-}
-
+}\n
 void printCurrentScreen() {
   Serial.println();
   Serial.println("----- PLAYER SCREEN -----");
@@ -99,10 +75,9 @@ void printCurrentScreen() {
   if (currentScreen == 0) {
     Serial.println("Screen: Status");
     Serial.print("State: ");
-    if (playerState == PLAYER_ALIVE) Serial.println("ALIVE");
-    if (playerState == PLAYER_INFECTED) Serial.println("INFECTED");
-    if (playerState == PLAYER_SAFE) Serial.println("SAFE");
-    if (playerState == PLAYER_ELIMINATED) Serial.println("ELIMINATED");
+    Serial.println(playerManager.getStateName());
+    Serial.print("Health: ");
+    Serial.println(playerManager.getHealth());
   } else if (currentScreen == 1) {
     Serial.println("Screen: Objective");
     Serial.println("Objective: Awaiting game start");
@@ -114,9 +89,23 @@ void printCurrentScreen() {
   Serial.println("-------------------------");
 }
 
-// =====================================================
-// Button handling
-// =====================================================
+void applyNotification() {
+  if (!notificationManager.hasNotification()) return;
+  huntLog("Notification: " + notificationManager.getMessage());
+  HuntNotificationType type = notificationManager.getType();
+  if (type == NOTIFY_ALERT || type == NOTIFY_WARNING) beepAlert();
+  else beepConfirm();
+  notificationManager.clear();
+}
+
+void applyHuntEvent(const HuntEvent &event) {
+  playerManager.handleEvent(event);
+  notificationManager.handleEvent(event);
+  showPlayerStateOnLed();
+  applyNotification();
+  printCurrentScreen();
+}
+
 void handleButton() {
   bool reading = digitalRead(BUTTON_PIN);
 
@@ -137,45 +126,34 @@ void handleButton() {
       unsigned long pressLength = millis() - buttonPressStartMs;
 
       if (pressLength >= BUTTON_LONG_PRESS_MS) {
-        huntLog("Long press detected - toggling infected test state");
-        playerState = (playerState == PLAYER_INFECTED) ? PLAYER_ALIVE : PLAYER_INFECTED;
-        beepAlert();
+        HuntEvent testEvent;
+        if (playerManager.getState() == PLAYER_INFECTED) {
+          testEvent = huntCreateEvent(HUNT_EVENT_PLAYER_SAFE, DEVICE_ID, DEVICE_ID, "0");
+        } else {
+          testEvent = huntCreateEvent(HUNT_EVENT_PLAYER_INFECTED, DEVICE_ID, DEVICE_ID, "0");
+        }
+        applyHuntEvent(testEvent);
       } else {
-        huntLog("Short press detected - changing screen");
         currentScreen++;
         if (currentScreen > 2) currentScreen = 0;
         beepConfirm();
+        printCurrentScreen();
       }
-
-      showPlayerStateOnLed();
-      printCurrentScreen();
     }
   }
 }
 
-// =====================================================
-// Incoming packet handling
-// =====================================================
-void applyEventPayload(const String &payload) {
-  if (payload.indexOf("HEAL") >= 0 || payload.indexOf("SAFE_ZONE") >= 0) {
-    huntLog("Event applied: player is now SAFE");
-    playerState = PLAYER_SAFE;
-    beepConfirm();
-  } else if (payload.indexOf("INFECT") >= 0 || payload.indexOf("SCANNER") >= 0) {
-    huntLog("Event applied: player is now INFECTED");
-    playerState = PLAYER_INFECTED;
-    beepAlert();
-  } else if (payload.indexOf("ELIMINATE") >= 0) {
-    huntLog("Event applied: player is now ELIMINATED");
-    playerState = PLAYER_ELIMINATED;
-    beepAlert();
-  } else {
-    huntLog("Event received but no local state rule matched");
-    beepConfirm();
+HuntEvent eventFromPayload(const HuntPacket &packet) {
+  if (packet.payload.indexOf("SAFE_ZONE") >= 0 || packet.payload.indexOf("HEAL") >= 0) {
+    return huntCreateEvent(HUNT_EVENT_PLAYER_SAFE, packet.source, DEVICE_ID, "25");
   }
-
-  showPlayerStateOnLed();
-  printCurrentScreen();
+  if (packet.payload.indexOf("SCANNER") >= 0 || packet.payload.indexOf("INFECT") >= 0) {
+    return huntCreateEvent(HUNT_EVENT_PLAYER_INFECTED, packet.source, DEVICE_ID, "0");
+  }
+  if (packet.payload.indexOf("ELIMINATE") >= 0) {
+    return huntCreateEvent(HUNT_EVENT_PLAYER_ELIMINATED, packet.source, DEVICE_ID, "0");
+  }
+  return huntCreateEvent(HUNT_EVENT_BASE_ACTIVATED, packet.source, DEVICE_ID, packet.payload);
 }
 
 void sendAckToSource(const String &source, const String &ackPayload) {
@@ -185,18 +163,13 @@ void sendAckToSource(const String &source, const String &ackPayload) {
 
 void handleIncomingPackets() {
   String rawPacket = huntEspNowReadPacket();
-
-  if (rawPacket.length() == 0) {
-    return;
-  }
+  if (rawPacket.length() == 0) return;
 
   HuntPacket packet = huntParsePacket(rawPacket);
-
   if (!packet.valid) {
     huntLog("Ignored invalid packet");
     return;
   }
-
   if (!huntIsPacketForDevice(packet, DEVICE_ID)) {
     huntLog("Ignored packet for another target: " + packet.target);
     return;
@@ -205,7 +178,8 @@ void handleIncomingPackets() {
   huntLog("Accepted packet type: " + packet.type + " from " + packet.source);
 
   if (packet.type == "EVENT") {
-    applyEventPayload(packet.payload);
+    HuntEvent event = eventFromPayload(packet);
+    applyHuntEvent(event);
     sendAckToSource(packet.source, "EVENT_RECEIVED");
   } else if (packet.type == "HEARTBEAT") {
     huntLog("Heartbeat from " + packet.source + ": " + packet.payload);
@@ -215,32 +189,21 @@ void handleIncomingPackets() {
   }
 }
 
-// =====================================================
-// Protocol test and heartbeat
-// =====================================================
 void runProtocolSelfTest() {
   String packet = huntBuildPacket("HELLO", DEVICE_ID, "ALL", "ROLE:PLAYER");
   huntLogPacket("BUILT", packet);
-
   HuntPacket parsed = huntParsePacket(packet);
-  if (parsed.valid) {
-    huntLog("Protocol parser self-test passed");
-  } else {
-    huntLog("Protocol parser self-test FAILED");
-  }
+  huntLog(parsed.valid ? "Protocol parser self-test passed" : "Protocol parser self-test FAILED");
 }
 
 void sendHeartbeatIfDue() {
   if (millis() - lastHeartbeatMs >= HUNT_HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatMs = millis();
-    String packet = huntBuildPacket("HEARTBEAT", DEVICE_ID, "ALL", "STATE:READY");
+    String packet = huntBuildPacket("HEARTBEAT", DEVICE_ID, "ALL", "STATE:" + playerManager.getStateName());
     huntEspNowSendBroadcast(packet);
   }
 }
 
-// =====================================================
-// Arduino setup and loop
-// =====================================================
 void setup() {
   huntDebugBegin(DEVICE_NAME);
 
@@ -250,10 +213,12 @@ void setup() {
   pinMode(RGB_BLUE_PIN, OUTPUT);
   pinMode(BUZZER_PIN, OUTPUT);
 
-  setRgbRaw(false, false, true); // Blue during boot.
+  setRgbRaw(false, false, true);
   huntLog("Booting Player Node");
   beepConfirm();
 
+  playerManager.begin(DEVICE_ID);
+  notificationManager.begin();
   runProtocolSelfTest();
 
   if (!huntEspNowBegin()) {
@@ -264,16 +229,13 @@ void setup() {
   String hello = huntBuildPacket("HELLO", DEVICE_ID, "ALL", "ROLE:PLAYER");
   huntEspNowSendBroadcast(hello);
 
-  playerState = PLAYER_ALIVE;
   showPlayerStateOnLed();
   printCurrentScreen();
-
   huntLog("Player Node ready");
 }
 
 void loop() {
   handleButton();
   handleIncomingPackets();
-  updateDisplay();
   sendHeartbeatIfDue();
 }
