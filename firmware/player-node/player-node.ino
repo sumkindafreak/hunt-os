@@ -63,7 +63,8 @@ void beepAlert() {
     digitalWrite(BUZZER_PIN, LOW);
     delay(60);
   }
-}\n
+}
+
 void printCurrentScreen() {
   Serial.println();
   Serial.println("----- PLAYER SCREEN -----");
