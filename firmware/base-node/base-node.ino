@@ -6,6 +6,7 @@
   - Tests rotary encoder, encoder button and two extra buttons.
   - Shows clear Serial debug messages.
   - Builds and parses HUNT protocol packets.
+  - Sends and receives ESP-NOW packets.
 
   Required libraries:
   - Arduino core for ESP32
@@ -16,6 +17,7 @@
 #include "../shared/HuntTypes.h"
 #include "../shared/HuntDebug.h"
 #include "../shared/HuntProtocol.h"
+#include "../shared/HuntEspNow.h"
 
 // =====================================================
 // Base state variables
@@ -88,7 +90,7 @@ void printBaseScreen() {
   Serial.println("Rotate encoder to change role");
   Serial.println("Encoder press = confirm/test role");
   Serial.println("Back button = debug back");
-  Serial.println("Action button = send test event");
+  Serial.println("Action button = send ESP-NOW test event");
   Serial.println("-------------------------");
 }
 
@@ -114,6 +116,53 @@ void handleEncoder() {
 }
 
 // =====================================================
+// Outgoing packets
+// =====================================================
+void sendRoleEventToPlayer() {
+  String payload = "BASE_ROLE:" + getRoleName(currentRole);
+  String packet = huntBuildPacket("EVENT", DEVICE_ID, "PLAYER_01", payload);
+  huntEspNowSendBroadcast(packet);
+}
+
+void sendHello() {
+  String packet = huntBuildPacket("HELLO", DEVICE_ID, "ALL", "ROLE:BASE;BASE_ROLE:" + getRoleName(currentRole));
+  huntEspNowSendBroadcast(packet);
+}
+
+// =====================================================
+// Incoming packet handling
+// =====================================================
+void handleIncomingPackets() {
+  String rawPacket = huntEspNowReadPacket();
+
+  if (rawPacket.length() == 0) {
+    return;
+  }
+
+  HuntPacket packet = huntParsePacket(rawPacket);
+
+  if (!packet.valid) {
+    huntLog("Ignored invalid packet");
+    return;
+  }
+
+  if (!huntIsPacketForDevice(packet, DEVICE_ID)) {
+    huntLog("Ignored packet for another target: " + packet.target);
+    return;
+  }
+
+  huntLog("Accepted packet type: " + packet.type + " from " + packet.source);
+
+  if (packet.type == "ACK") {
+    huntLog("ACK received: " + packet.payload);
+  } else if (packet.type == "HELLO") {
+    huntLog("HELLO received: " + packet.payload);
+  } else if (packet.type == "HEARTBEAT") {
+    huntLog("Heartbeat from " + packet.source + ": " + packet.payload);
+  }
+}
+
+// =====================================================
 // Button handling
 // =====================================================
 void handleButtons() {
@@ -133,14 +182,14 @@ void handleButtons() {
 
   if (actionReading == LOW && lastActionButton == HIGH) {
     lastButtonChangeMs = millis();
-    huntLog("Action button pressed - building test event");
-    String packet = huntBuildPacket("EVENT", DEVICE_ID, "PLAYER_01", "BASE_ROLE:" + getRoleName(currentRole));
-    huntLogPacket("TX", packet);
+    huntLog("Action button pressed - sending ESP-NOW test event");
+    sendRoleEventToPlayer();
   }
 
   if (encoderReading == LOW && lastEncoderButton == HIGH) {
     lastButtonChangeMs = millis();
     huntLog("Encoder button pressed - role confirmed: " + getRoleName(currentRole));
+    sendHello();
   }
 
   lastBackButton = backReading;
@@ -178,7 +227,7 @@ void sendHeartbeatIfDue() {
   if (millis() - lastHeartbeatMs >= HUNT_HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatMs = millis();
     String packet = huntBuildPacket("HEARTBEAT", DEVICE_ID, "ALL", "ROLE:" + getRoleName(currentRole));
-    huntLogPacket("TX", packet);
+    huntEspNowSendBroadcast(packet);
   }
 }
 
@@ -200,6 +249,12 @@ void setup() {
   huntLog("Booting Base Node");
   setRoleByIndex(0);
   runProtocolSelfTest();
+
+  if (!huntEspNowBegin()) {
+    huntLog("ESP-NOW failed to start");
+  }
+
+  sendHello();
   printBaseScreen();
   huntLog("Base Node ready");
 }
@@ -207,6 +262,7 @@ void setup() {
 void loop() {
   handleEncoder();
   handleButtons();
+  handleIncomingPackets();
   updateStatusLed();
   sendHeartbeatIfDue();
 }
