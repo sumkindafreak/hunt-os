@@ -1,15 +1,7 @@
 /*
   HUNT Base Node v0.1
-
-  Purpose:
-  - Boots an ESP32-S3 Base Node.
-  - Tests rotary encoder, encoder button and two extra buttons.
-  - Shows clear Serial debug messages.
-  - Builds and parses HUNT protocol packets.
-  - Sends and receives ESP-NOW packets.
-
-  Required libraries:
-  - Arduino core for ESP32
+  Bootable ESP32-S3 Base firmware spine with ESP-NOW, HUNT protocol
+  and the shared Role Manager.
 */
 
 #include <Arduino.h>
@@ -18,65 +10,24 @@
 #include "../shared/HuntDebug.h"
 #include "../shared/HuntProtocol.h"
 #include "../shared/HuntEspNow.h"
+#include "../shared/HuntEvents.h"
+#include "../shared/HuntRoleManager.h"
 
-// =====================================================
-// Base state variables
-// =====================================================
-HuntBaseRole currentRole = ROLE_SAFE_ZONE;
+// Arduino IDE compatibility: include shared implementations directly for now.
+#include "../shared/HuntProtocol.cpp"
+#include "../shared/HuntEspNow.cpp"
+#include "../shared/HuntRoleManager.cpp"
+
+HuntRoleManager roleManager;
+
 unsigned long lastHeartbeatMs = 0;
 unsigned long lastStatusBlinkMs = 0;
 bool statusLedState = false;
-
-// Encoder state.
 int lastEncoderClk = HIGH;
-int roleIndex = 0;
-
-// Button state.
 bool lastBackButton = HIGH;
 bool lastActionButton = HIGH;
 bool lastEncoderButton = HIGH;
 unsigned long lastButtonChangeMs = 0;
-
-// =====================================================
-// Role helpers
-// =====================================================
-String getRoleName(HuntBaseRole role) {
-  switch (role) {
-    case ROLE_SAFE_ZONE:
-      return "SAFE_ZONE";
-    case ROLE_SCANNER:
-      return "SCANNER";
-    case ROLE_OBJECTIVE:
-      return "OBJECTIVE";
-    case ROLE_EXTRACTION:
-      return "EXTRACTION";
-  }
-
-  return "UNKNOWN";
-}
-
-void setRoleByIndex(int index) {
-  if (index < 0) index = 3;
-  if (index > 3) index = 0;
-  roleIndex = index;
-
-  switch (roleIndex) {
-    case 0:
-      currentRole = ROLE_SAFE_ZONE;
-      break;
-    case 1:
-      currentRole = ROLE_SCANNER;
-      break;
-    case 2:
-      currentRole = ROLE_OBJECTIVE;
-      break;
-    case 3:
-      currentRole = ROLE_EXTRACTION;
-      break;
-  }
-
-  huntLog("Role changed to " + getRoleName(currentRole));
-}
 
 void printBaseScreen() {
   Serial.println();
@@ -86,61 +37,47 @@ void printBaseScreen() {
   Serial.print("Firmware: ");
   Serial.println(FIRMWARE_VERSION);
   Serial.print("Role: ");
-  Serial.println(getRoleName(currentRole));
+  Serial.println(roleManager.getRoleName());
   Serial.println("Rotate encoder to change role");
-  Serial.println("Encoder press = confirm/test role");
-  Serial.println("Back button = debug back");
-  Serial.println("Action button = send ESP-NOW test event");
+  Serial.println("Encoder press = confirm role");
+  Serial.println("Back button = print screen");
+  Serial.println("Action button = send role event");
   Serial.println("-------------------------");
 }
 
-// =====================================================
-// Encoder handling
-// =====================================================
 void handleEncoder() {
   int clkState = digitalRead(ENCODER_CLK_PIN);
 
   if (clkState != lastEncoderClk) {
     int dtState = digitalRead(ENCODER_DT_PIN);
 
-    if (dtState != clkState) {
-      setRoleByIndex(roleIndex + 1);
-    } else {
-      setRoleByIndex(roleIndex - 1);
-    }
+    if (dtState != clkState) roleManager.nextRole();
+    else roleManager.previousRole();
 
+    huntLog("Role changed to " + roleManager.getRoleName());
     printBaseScreen();
   }
 
   lastEncoderClk = clkState;
 }
 
-// =====================================================
-// Outgoing packets
-// =====================================================
+void sendHello() {
+  String packet = huntBuildPacket("HELLO", DEVICE_ID, "ALL", "ROLE:BASE;BASE_ROLE:" + roleManager.getRoleName());
+  huntEspNowSendBroadcast(packet);
+}
+
 void sendRoleEventToPlayer() {
-  String payload = "BASE_ROLE:" + getRoleName(currentRole);
+  HuntEvent event = roleManager.buildActivationEvent(DEVICE_ID, "PLAYER_01");
+  String payload = "EVENT:" + event.name + ";DATA:" + event.data + ";ROLE:" + roleManager.getRoleName();
   String packet = huntBuildPacket("EVENT", DEVICE_ID, "PLAYER_01", payload);
   huntEspNowSendBroadcast(packet);
 }
 
-void sendHello() {
-  String packet = huntBuildPacket("HELLO", DEVICE_ID, "ALL", "ROLE:BASE;BASE_ROLE:" + getRoleName(currentRole));
-  huntEspNowSendBroadcast(packet);
-}
-
-// =====================================================
-// Incoming packet handling
-// =====================================================
 void handleIncomingPackets() {
   String rawPacket = huntEspNowReadPacket();
-
-  if (rawPacket.length() == 0) {
-    return;
-  }
+  if (rawPacket.length() == 0) return;
 
   HuntPacket packet = huntParsePacket(rawPacket);
-
   if (!packet.valid) {
     huntLog("Ignored invalid packet");
     return;
@@ -153,22 +90,13 @@ void handleIncomingPackets() {
 
   huntLog("Accepted packet type: " + packet.type + " from " + packet.source);
 
-  if (packet.type == "ACK") {
-    huntLog("ACK received: " + packet.payload);
-  } else if (packet.type == "HELLO") {
-    huntLog("HELLO received: " + packet.payload);
-  } else if (packet.type == "HEARTBEAT") {
-    huntLog("Heartbeat from " + packet.source + ": " + packet.payload);
-  }
+  if (packet.type == "ACK") huntLog("ACK received: " + packet.payload);
+  else if (packet.type == "HELLO") huntLog("HELLO received: " + packet.payload);
+  else if (packet.type == "HEARTBEAT") huntLog("Heartbeat from " + packet.source + ": " + packet.payload);
 }
 
-// =====================================================
-// Button handling
-// =====================================================
 void handleButtons() {
-  if (millis() - lastButtonChangeMs < BUTTON_DEBOUNCE_MS) {
-    return;
-  }
+  if (millis() - lastButtonChangeMs < BUTTON_DEBOUNCE_MS) return;
 
   bool backReading = digitalRead(BUTTON_BACK_PIN);
   bool actionReading = digitalRead(BUTTON_ACTION_PIN);
@@ -182,13 +110,13 @@ void handleButtons() {
 
   if (actionReading == LOW && lastActionButton == HIGH) {
     lastButtonChangeMs = millis();
-    huntLog("Action button pressed - sending ESP-NOW test event");
+    huntLog("Action button pressed - sending role event");
     sendRoleEventToPlayer();
   }
 
   if (encoderReading == LOW && lastEncoderButton == HIGH) {
     lastButtonChangeMs = millis();
-    huntLog("Encoder button pressed - role confirmed: " + getRoleName(currentRole));
+    huntLog("Encoder button pressed - role confirmed: " + roleManager.getRoleName());
     sendHello();
   }
 
@@ -197,9 +125,6 @@ void handleButtons() {
   lastEncoderButton = encoderReading;
 }
 
-// =====================================================
-// Status output
-// =====================================================
 void updateStatusLed() {
   if (millis() - lastStatusBlinkMs >= 500) {
     lastStatusBlinkMs = millis();
@@ -208,32 +133,21 @@ void updateStatusLed() {
   }
 }
 
-// =====================================================
-// Protocol self-test and heartbeat
-// =====================================================
 void runProtocolSelfTest() {
-  String packet = huntBuildPacket("HELLO", DEVICE_ID, "ALL", "ROLE:BASE;BASE_ROLE:" + getRoleName(currentRole));
+  String packet = huntBuildPacket("HELLO", DEVICE_ID, "ALL", "ROLE:BASE;BASE_ROLE:" + roleManager.getRoleName());
   huntLogPacket("BUILT", packet);
-
   HuntPacket parsed = huntParsePacket(packet);
-  if (parsed.valid) {
-    huntLog("Protocol parser self-test passed");
-  } else {
-    huntLog("Protocol parser self-test FAILED");
-  }
+  huntLog(parsed.valid ? "Protocol parser self-test passed" : "Protocol parser self-test FAILED");
 }
 
 void sendHeartbeatIfDue() {
   if (millis() - lastHeartbeatMs >= HUNT_HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatMs = millis();
-    String packet = huntBuildPacket("HEARTBEAT", DEVICE_ID, "ALL", "ROLE:" + getRoleName(currentRole));
+    String packet = huntBuildPacket("HEARTBEAT", DEVICE_ID, "ALL", "ROLE:" + roleManager.getRoleName());
     huntEspNowSendBroadcast(packet);
   }
 }
 
-// =====================================================
-// Arduino setup and loop
-// =====================================================
 void setup() {
   huntDebugBegin(DEVICE_NAME);
 
@@ -245,14 +159,12 @@ void setup() {
   pinMode(STATUS_LED_PIN, OUTPUT);
 
   lastEncoderClk = digitalRead(ENCODER_CLK_PIN);
+  roleManager.begin(ROLE_SAFE_ZONE);
 
   huntLog("Booting Base Node");
-  setRoleByIndex(0);
   runProtocolSelfTest();
 
-  if (!huntEspNowBegin()) {
-    huntLog("ESP-NOW failed to start");
-  }
+  if (!huntEspNowBegin()) huntLog("ESP-NOW failed to start");
 
   sendHello();
   printBaseScreen();
