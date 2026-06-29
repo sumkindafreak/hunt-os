@@ -6,11 +6,10 @@
   - Shows clear serial debug messages.
   - Tests button, RGB LED and buzzer.
   - Builds and parses HUNT protocol packets.
+  - Receives ESP-NOW packets from Base Nodes.
 
   Required libraries:
   - Arduino core for ESP32
-
-  Optional OLED support will be added once the exact ESP32-C3 OLED board is confirmed.
 */
 
 #include <Arduino.h>
@@ -18,6 +17,7 @@
 #include "../shared/HuntTypes.h"
 #include "../shared/HuntDebug.h"
 #include "../shared/HuntProtocol.h"
+#include "../shared/HuntEspNow.h"
 
 // =====================================================
 // Player state variables
@@ -154,7 +154,69 @@ void handleButton() {
 }
 
 // =====================================================
-// Protocol test
+// Incoming packet handling
+// =====================================================
+void applyEventPayload(const String &payload) {
+  if (payload.indexOf("HEAL") >= 0 || payload.indexOf("SAFE_ZONE") >= 0) {
+    huntLog("Event applied: player is now SAFE");
+    playerState = PLAYER_SAFE;
+    beepConfirm();
+  } else if (payload.indexOf("INFECT") >= 0 || payload.indexOf("SCANNER") >= 0) {
+    huntLog("Event applied: player is now INFECTED");
+    playerState = PLAYER_INFECTED;
+    beepAlert();
+  } else if (payload.indexOf("ELIMINATE") >= 0) {
+    huntLog("Event applied: player is now ELIMINATED");
+    playerState = PLAYER_ELIMINATED;
+    beepAlert();
+  } else {
+    huntLog("Event received but no local state rule matched");
+    beepConfirm();
+  }
+
+  showPlayerStateOnLed();
+  printCurrentScreen();
+}
+
+void sendAckToSource(const String &source, const String &ackPayload) {
+  String ack = huntBuildPacket("ACK", DEVICE_ID, source, ackPayload);
+  huntEspNowSendBroadcast(ack);
+}
+
+void handleIncomingPackets() {
+  String rawPacket = huntEspNowReadPacket();
+
+  if (rawPacket.length() == 0) {
+    return;
+  }
+
+  HuntPacket packet = huntParsePacket(rawPacket);
+
+  if (!packet.valid) {
+    huntLog("Ignored invalid packet");
+    return;
+  }
+
+  if (!huntIsPacketForDevice(packet, DEVICE_ID)) {
+    huntLog("Ignored packet for another target: " + packet.target);
+    return;
+  }
+
+  huntLog("Accepted packet type: " + packet.type + " from " + packet.source);
+
+  if (packet.type == "EVENT") {
+    applyEventPayload(packet.payload);
+    sendAckToSource(packet.source, "EVENT_RECEIVED");
+  } else if (packet.type == "HEARTBEAT") {
+    huntLog("Heartbeat from " + packet.source + ": " + packet.payload);
+  } else if (packet.type == "COMMAND") {
+    huntLog("Command received: " + packet.payload);
+    sendAckToSource(packet.source, "COMMAND_RECEIVED");
+  }
+}
+
+// =====================================================
+// Protocol test and heartbeat
 // =====================================================
 void runProtocolSelfTest() {
   String packet = huntBuildPacket("HELLO", DEVICE_ID, "ALL", "ROLE:PLAYER");
@@ -172,7 +234,7 @@ void sendHeartbeatIfDue() {
   if (millis() - lastHeartbeatMs >= HUNT_HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatMs = millis();
     String packet = huntBuildPacket("HEARTBEAT", DEVICE_ID, "ALL", "STATE:READY");
-    huntLogPacket("TX", packet);
+    huntEspNowSendBroadcast(packet);
   }
 }
 
@@ -194,6 +256,14 @@ void setup() {
 
   runProtocolSelfTest();
 
+  if (!huntEspNowBegin()) {
+    huntLog("ESP-NOW failed to start");
+    setRgbRaw(true, false, false);
+  }
+
+  String hello = huntBuildPacket("HELLO", DEVICE_ID, "ALL", "ROLE:PLAYER");
+  huntEspNowSendBroadcast(hello);
+
   playerState = PLAYER_ALIVE;
   showPlayerStateOnLed();
   printCurrentScreen();
@@ -203,6 +273,7 @@ void setup() {
 
 void loop() {
   handleButton();
+  handleIncomingPackets();
   updateDisplay();
   sendHeartbeatIfDue();
 }
