@@ -21,8 +21,13 @@
 #define BUTTON_BACK_PIN 7
 #define BUTTON_ACTION_PIN 8
 
-// Optional status LED for prototype feedback.
+// Optional onboard/status LED for prototype feedback.
 #define STATUS_LED_PIN 2
+
+// NeoPixel status ring / strip.
+#define BASE_NEOPIXEL_PIN 9
+#define BASE_NEOPIXEL_COUNT 12
+#define BASE_NEOPIXEL_BRIGHTNESS 40
 
 #define BUTTON_DEBOUNCE_MS 40
 #define ENCODER_DEBOUNCE_MS 3
