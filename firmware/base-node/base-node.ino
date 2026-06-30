@@ -1,7 +1,11 @@
 /*
   HUNT Base Node v0.1
-  Bootable ESP32-S3 Base firmware spine with ESP-NOW, HUNT protocol
-  and the shared Role Manager.
+  Bootable ESP32-S3 Base firmware spine with ESP-NOW, HUNT protocol,
+  shared Role Manager and NeoPixel role/status feedback.
+
+  Required libraries:
+  - Arduino core for ESP32
+  - Adafruit NeoPixel
 */
 
 #include <Arduino.h>
@@ -12,13 +16,16 @@
 #include "../shared/HuntEspNow.h"
 #include "../shared/HuntEvents.h"
 #include "../shared/HuntRoleManager.h"
+#include "../shared/HuntNeoPixels.h"
 
 // Arduino IDE compatibility: include shared implementations directly for now.
 #include "../shared/HuntProtocol.cpp"
 #include "../shared/HuntEspNow.cpp"
 #include "../shared/HuntRoleManager.cpp"
+#include "../shared/HuntNeoPixels.cpp"
 
 HuntRoleManager roleManager;
+HuntNeoPixelManager neoPixels(BASE_NEOPIXEL_PIN, BASE_NEOPIXEL_COUNT, BASE_NEOPIXEL_BRIGHTNESS);
 
 unsigned long lastHeartbeatMs = 0;
 unsigned long lastStatusBlinkMs = 0;
@@ -38,6 +45,10 @@ void printBaseScreen() {
   Serial.println(FIRMWARE_VERSION);
   Serial.print("Role: ");
   Serial.println(roleManager.getRoleName());
+  Serial.print("NeoPixels: ");
+  Serial.print(BASE_NEOPIXEL_COUNT);
+  Serial.print(" on pin ");
+  Serial.println(BASE_NEOPIXEL_PIN);
   Serial.println("Rotate encoder to change role");
   Serial.println("Encoder press = confirm role");
   Serial.println("Back button = print screen");
@@ -55,6 +66,7 @@ void handleEncoder() {
     else roleManager.previousRole();
 
     huntLog("Role changed to " + roleManager.getRoleName());
+    neoPixels.setRoleColour(roleManager.getRole());
     printBaseScreen();
   }
 
@@ -71,6 +83,7 @@ void sendRoleEventToPlayer() {
   String payload = "EVENT:" + event.name + ";DATA:" + event.data + ";ROLE:" + roleManager.getRoleName();
   String packet = huntBuildPacket("EVENT", DEVICE_ID, "PLAYER_01", payload);
   huntEspNowSendBroadcast(packet);
+  neoPixels.flashActivation();
 }
 
 void handleIncomingPackets() {
@@ -90,9 +103,14 @@ void handleIncomingPackets() {
 
   huntLog("Accepted packet type: " + packet.type + " from " + packet.source);
 
-  if (packet.type == "ACK") huntLog("ACK received: " + packet.payload);
-  else if (packet.type == "HELLO") huntLog("HELLO received: " + packet.payload);
-  else if (packet.type == "HEARTBEAT") huntLog("Heartbeat from " + packet.source + ": " + packet.payload);
+  if (packet.type == "ACK") {
+    huntLog("ACK received: " + packet.payload);
+    neoPixels.flashActivation();
+  } else if (packet.type == "HELLO") {
+    huntLog("HELLO received: " + packet.payload);
+  } else if (packet.type == "HEARTBEAT") {
+    huntLog("Heartbeat from " + packet.source + ": " + packet.payload);
+  }
 }
 
 void handleButtons() {
@@ -117,6 +135,7 @@ void handleButtons() {
   if (encoderReading == LOW && lastEncoderButton == HIGH) {
     lastButtonChangeMs = millis();
     huntLog("Encoder button pressed - role confirmed: " + roleManager.getRoleName());
+    neoPixels.flashActivation();
     sendHello();
   }
 
@@ -160,11 +179,16 @@ void setup() {
 
   lastEncoderClk = digitalRead(ENCODER_CLK_PIN);
   roleManager.begin(ROLE_SAFE_ZONE);
+  neoPixels.begin();
+  neoPixels.setRoleColour(roleManager.getRole());
 
   huntLog("Booting Base Node");
   runProtocolSelfTest();
 
-  if (!huntEspNowBegin()) huntLog("ESP-NOW failed to start");
+  if (!huntEspNowBegin()) {
+    huntLog("ESP-NOW failed to start");
+    neoPixels.showError();
+  }
 
   sendHello();
   printBaseScreen();
@@ -176,5 +200,6 @@ void loop() {
   handleButtons();
   handleIncomingPackets();
   updateStatusLed();
+  neoPixels.update();
   sendHeartbeatIfDue();
 }
