@@ -3,9 +3,10 @@
 
 // =====================================================
 // HUNT Player Node v0.1 Configuration
-// Board target: ESP32-C3 Super Mini with OLED
-// NOTE: Pin values are prototype defaults and may need
-// updating once the exact OLED board pinout is confirmed.
+// Board target: ESP32-C3 Mini OLED board
+// Known from board diagram:
+//   OLED SDA = GPIO8
+//   OLED SCL = GPIO9
 // =====================================================
 
 #define DEVICE_ID "PLAYER_01"
@@ -13,9 +14,11 @@
 #define FIRMWARE_VERSION "Player v0.1"
 
 // Single player button.
+// Prototype default until final enclosure wiring is confirmed.
 #define BUTTON_PIN 3
 
 // RGB LED pins. These defaults assume a simple 3-pin RGB LED.
+// May later be replaced with a single NeoPixel output.
 #define RGB_RED_PIN 4
 #define RGB_GREEN_PIN 5
 #define RGB_BLUE_PIN 6
@@ -24,10 +27,15 @@
 // Buzzer pin. Works best with an active buzzer for first tests.
 #define BUZZER_PIN 7
 
-// OLED I2C pins. Many ESP32-C3 OLED boards use fixed onboard pins.
+// Onboard OLED I2C pins.
 #define OLED_SDA_PIN 8
 #define OLED_SCL_PIN 9
 #define OLED_I2C_ADDRESS 0x3C
+
+// OLED driver is still to be confirmed by test sketch.
+#define OLED_DRIVER_UNKNOWN 1
+#define OLED_WIDTH 72
+#define OLED_HEIGHT 40
 
 // Button timing.
 #define BUTTON_DEBOUNCE_MS 40
