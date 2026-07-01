@@ -1,0 +1,7 @@
+{
+  "sketch": "player-node.ino",
+  "board": "esp32:esp32:makergo_c3_supermini",
+  "port": "COM18",
+  "output": "../build/player-node",
+  "configuration": "UploadSpeed=115200,CDCOnBoot=default,PartitionScheme=default,FlashFreq=80,DebugLevel=none,EraseFlash=none"
+}

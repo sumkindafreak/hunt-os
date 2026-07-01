@@ -1,0 +1,25 @@
+# Arduino / ESP32 build output
+**/build/
+**/build-*/
+**/*.o
+**/*.d
+**/*.map
+**/*.elf
+**/*.bin
+**/compile_commands.json
+**/flash_args
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Secrets
+.env
+.env.*
+*.pem
+credentials.json
+
+# IDE caches (keep .vscode/arduino.json — useful for upload settings)
+.vscode/.browse.VC.db
+.vscode/ipch/

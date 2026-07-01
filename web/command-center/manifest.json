@@ -1,0 +1,10 @@
+{
+  "name": "HUNT Command Center",
+  "short_name": "HUNT OS",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#05070a",
+  "theme_color": "#00ff9c",
+  "description": "Local command interface for HUNT OS live-action games.",
+  "icons": []
+}

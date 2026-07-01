@@ -1,0 +1,134 @@
+:root {
+  --bg: #05070a;
+  --panel: #101820;
+  --panel-2: #162433;
+  --text: #e8fff7;
+  --muted: #7fa99b;
+  --accent: #00ff9c;
+  --danger: #ff3455;
+  --warning: #ffcc33;
+  --blue: #3ba7ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: radial-gradient(circle at top, #10251f, var(--bg));
+  color: var(--text);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border-bottom: 1px solid rgba(0, 255, 156, 0.25);
+  background: rgba(5, 7, 10, 0.9);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+h1 {
+  margin: 0;
+  letter-spacing: 2px;
+  color: var(--accent);
+}
+
+p {
+  color: var(--muted);
+}
+
+button {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid rgba(0, 255, 156, 0.25);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-weight: bold;
+}
+
+button.active,
+button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button.danger {
+  border-color: var(--danger);
+  color: white;
+  background: linear-gradient(180deg, #651322, #31070e);
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 12px;
+  background: #070d12;
+}
+
+main {
+  padding: 14px;
+  padding-bottom: 70px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.card {
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+  border: 1px solid rgba(0, 255, 156, 0.16);
+  border-radius: 16px;
+  padding: 14px;
+  box-shadow: 0 0 18px rgba(0, 255, 156, 0.05);
+}
+
+.card h2,
+.card h3 {
+  margin-top: 0;
+}
+
+.value {
+  font-size: 28px;
+  font-weight: bold;
+  color: var(--accent);
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+}
+
+.log {
+  font-family: monospace;
+  font-size: 13px;
+  background: #020304;
+  border-radius: 12px;
+  padding: 12px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.footer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: rgba(5, 7, 10, 0.95);
+  border-top: 1px solid rgba(0, 255, 156, 0.25);
+  color: var(--muted);
+}

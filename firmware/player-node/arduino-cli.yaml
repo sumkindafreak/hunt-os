@@ -1,0 +1,10 @@
+# HUNT Player Node — Arduino CLI profile
+# Usage from this folder:
+#   arduino-cli compile --profile player-node
+#   arduino-cli upload   --profile player-node -p COM18
+
+profiles:
+  player-node:
+    fqbn: esp32:esp32:makergo_c3_supermini:UploadSpeed=115200,CDCOnBoot=default,PartitionScheme=default,FlashFreq=80,DebugLevel=none,EraseFlash=none
+    platforms:
+      - platform: esp32:esp32 (>=3.0.0)
