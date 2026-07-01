@@ -1,29 +1,42 @@
 /*
-  HUNT Player Node v0.1
-  Bootable ESP32-C3 Player firmware spine with ESP-NOW, HUNT protocol,
-  player state management and notifications.
+  HUNT Player Node v0.1 Alpha
+
+  ESP32-C3 Player firmware using the HUNT Kernel service model.
+
+  Required libraries:
+  - Arduino core for ESP32
 */
 
 #include <Arduino.h>
 #include "config.h"
 #include "../shared/HuntTypes.h"
 #include "../shared/HuntDebug.h"
-#include "../shared/HuntProtocol.h"
-#include "../shared/HuntEspNow.h"
 #include "../shared/HuntEvents.h"
-#include "../shared/HuntPlayerState.h"
+#include "../shared/HuntKernel.h"
+#include "../shared/HuntNodeRegistry.h"
+#include "../shared/HuntNetworkService.h"
+#include "../shared/HuntPlayerService.h"
 #include "../shared/HuntNotifications.h"
 
-// Arduino IDE compatibility: include shared implementations directly for now.
+// Arduino IDE compatibility: include shared implementations directly.
 #include "../shared/HuntProtocol.cpp"
 #include "../shared/HuntEspNow.cpp"
+#include "../shared/HuntEventBus.cpp"
+#include "../shared/HuntServiceManager.cpp"
+#include "../shared/HuntKernel.cpp"
+#include "../shared/HuntNodeRegistry.cpp"
+#include "../shared/HuntNetworkService.cpp"
 #include "../shared/HuntPlayerState.cpp"
+#include "../shared/HuntPlayerService.cpp"
 #include "../shared/HuntNotifications.cpp"
 
-HuntPlayerStateManager playerManager;
+HuntKernel huntKernel;
+HuntNodeRegistry nodeRegistry;
+HuntNetworkService networkService(DEVICE_ID, huntKernel.events(), &nodeRegistry);
+HuntPlayerService playerService(huntKernel.events(), DEVICE_ID);
 HuntNotificationManager notificationManager;
 
-unsigned long lastHeartbeatMs = 0;
+unsigned long lastHelloMs = 0;
 unsigned long lastButtonChangeMs = 0;
 unsigned long buttonPressStartMs = 0;
 bool lastButtonReading = HIGH;
@@ -43,7 +56,7 @@ void setRgbRaw(bool redOn, bool greenOn, bool blueOn) {
 }
 
 void showPlayerStateOnLed() {
-  HuntPlayerState state = playerManager.getState();
+  HuntPlayerState state = playerService.state()->getState();
   if (state == PLAYER_ALIVE) setRgbRaw(false, true, false);
   if (state == PLAYER_INFECTED) setRgbRaw(true, false, true);
   if (state == PLAYER_SAFE) setRgbRaw(false, false, true);
@@ -67,31 +80,19 @@ void beepAlert() {
 
 void printCurrentScreen() {
   Serial.println();
-  Serial.println("----- PLAYER SCREEN -----");
-  Serial.print("Device: ");
-  Serial.println(DEVICE_ID);
-  Serial.print("Firmware: ");
-  Serial.println(FIRMWARE_VERSION);
-
-  if (currentScreen == 0) {
-    Serial.println("Screen: Status");
-    Serial.print("State: ");
-    Serial.println(playerManager.getStateName());
-    Serial.print("Health: ");
-    Serial.println(playerManager.getHealth());
-  } else if (currentScreen == 1) {
-    Serial.println("Screen: Objective");
-    Serial.println("Objective: Awaiting game start");
-  } else {
-    Serial.println("Screen: Diagnostics");
-    Serial.print("Millis: ");
-    Serial.println(millis());
-  }
-  Serial.println("-------------------------");
+  Serial.println("----- HUNT PLAYER ALPHA -----");
+  Serial.print("Device: "); Serial.println(DEVICE_ID);
+  Serial.print("Firmware: "); Serial.println(FIRMWARE_VERSION);
+  Serial.print("State: "); Serial.println(playerService.state()->getStateName());
+  Serial.print("Health: "); Serial.println(playerService.state()->getHealth());
+  Serial.print("Known nodes: "); Serial.println(nodeRegistry.count());
+  Serial.println("-----------------------------");
 }
 
-void applyNotification() {
+void applyNotification(const HuntEvent &event) {
+  notificationManager.handleEvent(event);
   if (!notificationManager.hasNotification()) return;
+
   huntLog("Notification: " + notificationManager.getMessage());
   HuntNotificationType type = notificationManager.getType();
   if (type == NOTIFY_ALERT || type == NOTIFY_WARNING) beepAlert();
@@ -100,10 +101,9 @@ void applyNotification() {
 }
 
 void applyHuntEvent(const HuntEvent &event) {
-  playerManager.handleEvent(event);
-  notificationManager.handleEvent(event);
+  playerService.applyEvent(event);
+  applyNotification(event);
   showPlayerStateOnLed();
-  applyNotification();
   printCurrentScreen();
 }
 
@@ -127,13 +127,13 @@ void handleButton() {
       unsigned long pressLength = millis() - buttonPressStartMs;
 
       if (pressLength >= BUTTON_LONG_PRESS_MS) {
-        HuntEvent testEvent;
-        if (playerManager.getState() == PLAYER_INFECTED) {
-          testEvent = huntCreateEvent(HUNT_EVENT_PLAYER_SAFE, DEVICE_ID, DEVICE_ID, "0");
+        HuntEvent event;
+        if (playerService.state()->getState() == PLAYER_INFECTED) {
+          event = huntCreateEvent(HUNT_EVENT_PLAYER_SAFE, DEVICE_ID, DEVICE_ID, "0");
         } else {
-          testEvent = huntCreateEvent(HUNT_EVENT_PLAYER_INFECTED, DEVICE_ID, DEVICE_ID, "0");
+          event = huntCreateEvent(HUNT_EVENT_PLAYER_INFECTED, DEVICE_ID, DEVICE_ID, "0");
         }
-        applyHuntEvent(testEvent);
+        applyHuntEvent(event);
       } else {
         currentScreen++;
         if (currentScreen > 2) currentScreen = 0;
@@ -144,64 +144,21 @@ void handleButton() {
   }
 }
 
-HuntEvent eventFromPayload(const HuntPacket &packet) {
-  if (packet.payload.indexOf("SAFE_ZONE") >= 0 || packet.payload.indexOf("HEAL") >= 0) {
-    return huntCreateEvent(HUNT_EVENT_PLAYER_SAFE, packet.source, DEVICE_ID, "25");
-  }
-  if (packet.payload.indexOf("SCANNER") >= 0 || packet.payload.indexOf("INFECT") >= 0) {
-    return huntCreateEvent(HUNT_EVENT_PLAYER_INFECTED, packet.source, DEVICE_ID, "0");
-  }
-  if (packet.payload.indexOf("ELIMINATE") >= 0) {
-    return huntCreateEvent(HUNT_EVENT_PLAYER_ELIMINATED, packet.source, DEVICE_ID, "0");
-  }
-  return huntCreateEvent(HUNT_EVENT_BASE_ACTIVATED, packet.source, DEVICE_ID, packet.payload);
-}
-
-void sendAckToSource(const String &source, const String &ackPayload) {
-  String ack = huntBuildPacket("ACK", DEVICE_ID, source, ackPayload);
-  huntEspNowSendBroadcast(ack);
-}
-
-void handleIncomingPackets() {
-  String rawPacket = huntEspNowReadPacket();
-  if (rawPacket.length() == 0) return;
-
-  HuntPacket packet = huntParsePacket(rawPacket);
-  if (!packet.valid) {
-    huntLog("Ignored invalid packet");
-    return;
-  }
-  if (!huntIsPacketForDevice(packet, DEVICE_ID)) {
-    huntLog("Ignored packet for another target: " + packet.target);
-    return;
-  }
-
-  huntLog("Accepted packet type: " + packet.type + " from " + packet.source);
-
-  if (packet.type == "EVENT") {
-    HuntEvent event = eventFromPayload(packet);
-    applyHuntEvent(event);
-    sendAckToSource(packet.source, "EVENT_RECEIVED");
-  } else if (packet.type == "HEARTBEAT") {
-    huntLog("Heartbeat from " + packet.source + ": " + packet.payload);
-  } else if (packet.type == "COMMAND") {
-    huntLog("Command received: " + packet.payload);
-    sendAckToSource(packet.source, "COMMAND_RECEIVED");
+void sendHelloIfDue() {
+  if (millis() - lastHelloMs >= HUNT_HEARTBEAT_INTERVAL_MS) {
+    lastHelloMs = millis();
+    networkService.sendHello("PLAYER", FIRMWARE_VERSION, playerService.state()->getStateName());
   }
 }
 
-void runProtocolSelfTest() {
-  String packet = huntBuildPacket("HELLO", DEVICE_ID, "ALL", "ROLE:PLAYER");
-  huntLogPacket("BUILT", packet);
-  HuntPacket parsed = huntParsePacket(packet);
-  huntLog(parsed.valid ? "Protocol parser self-test passed" : "Protocol parser self-test FAILED");
-}
+void processAlphaEvents() {
+  while (huntKernel.events()->available()) {
+    HuntEvent event = huntKernel.events()->read();
+    huntLog("Event: " + event.name + " from " + event.source + " data " + event.data);
 
-void sendHeartbeatIfDue() {
-  if (millis() - lastHeartbeatMs >= HUNT_HEARTBEAT_INTERVAL_MS) {
-    lastHeartbeatMs = millis();
-    String packet = huntBuildPacket("HEARTBEAT", DEVICE_ID, "ALL", "STATE:" + playerManager.getStateName());
-    huntEspNowSendBroadcast(packet);
+    if (event.target == DEVICE_ID || event.target == "ALL") {
+      applyHuntEvent(event);
+    }
   }
 }
 
@@ -215,28 +172,24 @@ void setup() {
   pinMode(BUZZER_PIN, OUTPUT);
 
   setRgbRaw(false, false, true);
-  huntLog("Booting Player Node");
   beepConfirm();
-
-  playerManager.begin(DEVICE_ID);
+  nodeRegistry.begin();
   notificationManager.begin();
-  runProtocolSelfTest();
 
-  if (!huntEspNowBegin()) {
-    huntLog("ESP-NOW failed to start");
-    setRgbRaw(true, false, false);
-  }
+  huntKernel.services()->registerService(&networkService);
+  huntKernel.services()->registerService(&playerService);
+  huntKernel.begin();
 
-  String hello = huntBuildPacket("HELLO", DEVICE_ID, "ALL", "ROLE:PLAYER");
-  huntEspNowSendBroadcast(hello);
-
+  networkService.sendHello("PLAYER", FIRMWARE_VERSION, playerService.state()->getStateName());
   showPlayerStateOnLed();
   printCurrentScreen();
-  huntLog("Player Node ready");
+  huntLog("Player Alpha ready");
 }
 
 void loop() {
   handleButton();
-  handleIncomingPackets();
-  sendHeartbeatIfDue();
+  huntKernel.update();
+  nodeRegistry.update();
+  sendHelloIfDue();
+  processAlphaEvents();
 }
