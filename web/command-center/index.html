@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#05070a" />
+  <title>HUNT Command Center</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="css/main.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>HUNT OS</h1>
+      <p>Command Center v0.1</p>
+    </div>
+    <button id="emergencyStop" class="danger">EMERGENCY STOP</button>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button data-page="dashboard" class="active">Dashboard</button>
+    <button data-page="game">Game</button>
+    <button data-page="players">Players</button>
+    <button data-page="nodes">Nodes</button>
+    <button data-page="lighting">Lighting</button>
+    <button data-page="audio">Audio</button>
+    <button data-page="relay">Relay</button>
+    <button data-page="scenes">Scenes</button>
+    <button data-page="diagnostics">Diagnostics</button>
+  </nav>
+
+  <main id="app"></main>
+
+  <footer class="footer">
+    <span id="connectionStatus">Offline Demo Mode</span>
+    <span id="clock">--:--:--</span>
+  </footer>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
