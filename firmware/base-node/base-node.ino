@@ -1,7 +1,7 @@
 /*
-  HUNT Base Node v0.1
-  Bootable ESP32-S3 Base firmware spine with ESP-NOW, HUNT protocol,
-  shared Role Manager, NeoPixel status ring and decor/expansion NeoPixel output.
+  HUNT Base Node v0.1 Alpha
+
+  ESP32-S3 Base firmware using the HUNT Kernel service model.
 
   Required libraries:
   - Arduino core for ESP32
@@ -12,120 +12,90 @@
 #include "config.h"
 #include "../shared/HuntTypes.h"
 #include "../shared/HuntDebug.h"
-#include "../shared/HuntProtocol.h"
-#include "../shared/HuntEspNow.h"
 #include "../shared/HuntEvents.h"
+#include "../shared/HuntKernel.h"
+#include "../shared/HuntNodeRegistry.h"
+#include "../shared/HuntNetworkService.h"
 #include "../shared/HuntRoleManager.h"
 #include "../shared/HuntNeoPixels.h"
+#include "../shared/HuntSceneService.h"
+#include "../shared/HuntLightingService.h"
+#include "../shared/HuntSoundService.h"
+#include "../shared/HuntWebService.h"
 
-// Arduino IDE compatibility: include shared implementations directly for now.
+// Arduino IDE compatibility: include shared implementations directly.
 #include "../shared/HuntProtocol.cpp"
 #include "../shared/HuntEspNow.cpp"
+#include "../shared/HuntEventBus.cpp"
+#include "../shared/HuntServiceManager.cpp"
+#include "../shared/HuntKernel.cpp"
+#include "../shared/HuntNodeRegistry.cpp"
+#include "../shared/HuntNetworkService.cpp"
 #include "../shared/HuntRoleManager.cpp"
 #include "../shared/HuntNeoPixels.cpp"
+#include "../shared/HuntSceneService.cpp"
+#include "../shared/HuntLightingService.cpp"
+#include "../shared/HuntSoundService.cpp"
+#include "../shared/HuntWebServer.cpp"
+#include "../shared/HuntWebService.cpp"
 
+HuntKernel huntKernel;
+HuntNodeRegistry nodeRegistry;
 HuntRoleManager roleManager;
 
-// Status ring: communicates what the Base is doing.
 HuntNeoPixelManager statusPixels(BASE_NEOPIXEL_PIN, BASE_NEOPIXEL_COUNT, BASE_NEOPIXEL_BRIGHTNESS);
-
-// Decor strip: used for atmosphere, prop lighting and expansion effects.
 HuntNeoPixelManager decorPixels(DECOR_NEOPIXEL_PIN, DECOR_NEOPIXEL_COUNT, DECOR_NEOPIXEL_BRIGHTNESS);
 
-unsigned long lastHeartbeatMs = 0;
+HuntNetworkService networkService(DEVICE_ID, huntKernel.events(), &nodeRegistry);
+HuntSceneService sceneService(huntKernel.events());
+HuntLightingService lightingService(huntKernel.events(), &statusPixels, &decorPixels);
+HuntSoundService soundService(huntKernel.events());
+HuntWebService webService("HUNT_BASE_01", "huntbase01");
+
+unsigned long lastHelloMs = 0;
 unsigned long lastStatusBlinkMs = 0;
+unsigned long lastButtonChangeMs = 0;
 bool statusLedState = false;
-int lastEncoderClk = HIGH;
 bool lastBackButton = HIGH;
 bool lastActionButton = HIGH;
 bool lastEncoderButton = HIGH;
-unsigned long lastButtonChangeMs = 0;
+int lastEncoderClk = HIGH;
 
 void printBaseScreen() {
   Serial.println();
-  Serial.println("------ BASE SCREEN ------");
-  Serial.print("Device: ");
-  Serial.println(DEVICE_ID);
-  Serial.print("Firmware: ");
-  Serial.println(FIRMWARE_VERSION);
-  Serial.print("Role: ");
-  Serial.println(roleManager.getRoleName());
-  Serial.print("Status NeoPixels: ");
-  Serial.print(BASE_NEOPIXEL_COUNT);
-  Serial.print(" on pin ");
-  Serial.println(BASE_NEOPIXEL_PIN);
-  Serial.print("Decor NeoPixels: ");
-  Serial.print(DECOR_NEOPIXEL_COUNT);
-  Serial.print(" on pin ");
-  Serial.println(DECOR_NEOPIXEL_PIN);
-  Serial.println("Rotate encoder to change role");
-  Serial.println("Encoder press = confirm role");
-  Serial.println("Back button = print screen");
-  Serial.println("Action button = send role event");
-  Serial.println("-------------------------");
-}
-
-void applyRoleLighting() {
-  statusPixels.setRoleColour(roleManager.getRole());
-  decorPixels.setRoleColour(roleManager.getRole());
+  Serial.println("------ HUNT BASE ALPHA ------");
+  Serial.print("Device: "); Serial.println(DEVICE_ID);
+  Serial.print("Firmware: "); Serial.println(FIRMWARE_VERSION);
+  Serial.print("Role: "); Serial.println(roleManager.getRoleName());
+  Serial.print("Scene: "); Serial.println(sceneService.currentScene());
+  Serial.print("Known nodes: "); Serial.println(nodeRegistry.count());
+  Serial.println("Web AP: HUNT_BASE_01 / huntbase01");
+  Serial.println("Open: http://192.168.4.1");
+  Serial.println("-----------------------------");
 }
 
 void handleEncoder() {
   int clkState = digitalRead(ENCODER_CLK_PIN);
-
   if (clkState != lastEncoderClk) {
     int dtState = digitalRead(ENCODER_DT_PIN);
-
     if (dtState != clkState) roleManager.nextRole();
     else roleManager.previousRole();
 
-    huntLog("Role changed to " + roleManager.getRoleName());
-    applyRoleLighting();
+    lightingService.setRole(roleManager.getRole());
+    sceneService.loadScene(roleManager.getRoleName());
+    soundService.playTrack(3);
+    huntLog("Role changed: " + roleManager.getRoleName());
     printBaseScreen();
   }
-
   lastEncoderClk = clkState;
-}
-
-void sendHello() {
-  String packet = huntBuildPacket("HELLO", DEVICE_ID, "ALL", "ROLE:BASE;BASE_ROLE:" + roleManager.getRoleName());
-  huntEspNowSendBroadcast(packet);
 }
 
 void sendRoleEventToPlayer() {
   HuntEvent event = roleManager.buildActivationEvent(DEVICE_ID, "PLAYER_01");
-  String payload = "EVENT:" + event.name + ";DATA:" + event.data + ";ROLE:" + roleManager.getRoleName();
-  String packet = huntBuildPacket("EVENT", DEVICE_ID, "PLAYER_01", payload);
-  huntEspNowSendBroadcast(packet);
-  statusPixels.flashActivation();
-  decorPixels.flashActivation();
-}
-
-void handleIncomingPackets() {
-  String rawPacket = huntEspNowReadPacket();
-  if (rawPacket.length() == 0) return;
-
-  HuntPacket packet = huntParsePacket(rawPacket);
-  if (!packet.valid) {
-    huntLog("Ignored invalid packet");
-    return;
-  }
-
-  if (!huntIsPacketForDevice(packet, DEVICE_ID)) {
-    huntLog("Ignored packet for another target: " + packet.target);
-    return;
-  }
-
-  huntLog("Accepted packet type: " + packet.type + " from " + packet.source);
-
-  if (packet.type == "ACK") {
-    huntLog("ACK received: " + packet.payload);
-    statusPixels.flashActivation();
-  } else if (packet.type == "HELLO") {
-    huntLog("HELLO received: " + packet.payload);
-  } else if (packet.type == "HEARTBEAT") {
-    huntLog("Heartbeat from " + packet.source + ": " + packet.payload);
-  }
+  networkService.sendEvent("PLAYER_01", event);
+  lightingService.flash();
+  soundService.playTrack(6);
+  huntKernel.events()->publish(event);
 }
 
 void handleButtons() {
@@ -137,22 +107,22 @@ void handleButtons() {
 
   if (backReading == LOW && lastBackButton == HIGH) {
     lastButtonChangeMs = millis();
-    huntLog("Back button pressed");
+    soundService.playTrack(3);
     printBaseScreen();
   }
 
   if (actionReading == LOW && lastActionButton == HIGH) {
     lastButtonChangeMs = millis();
-    huntLog("Action button pressed - sending role event");
+    huntLog("Action button: send role event");
     sendRoleEventToPlayer();
   }
 
   if (encoderReading == LOW && lastEncoderButton == HIGH) {
     lastButtonChangeMs = millis();
-    huntLog("Encoder button pressed - role confirmed: " + roleManager.getRoleName());
-    statusPixels.flashActivation();
-    decorPixels.flashActivation();
-    sendHello();
+    huntLog("Role confirmed: " + roleManager.getRoleName());
+    lightingService.flash();
+    soundService.playTrack(4);
+    networkService.sendHello("BASE", FIRMWARE_VERSION, roleManager.getRoleName());
   }
 
   lastBackButton = backReading;
@@ -168,18 +138,17 @@ void updateStatusLed() {
   }
 }
 
-void runProtocolSelfTest() {
-  String packet = huntBuildPacket("HELLO", DEVICE_ID, "ALL", "ROLE:BASE;BASE_ROLE:" + roleManager.getRoleName());
-  huntLogPacket("BUILT", packet);
-  HuntPacket parsed = huntParsePacket(packet);
-  huntLog(parsed.valid ? "Protocol parser self-test passed" : "Protocol parser self-test FAILED");
+void sendHelloIfDue() {
+  if (millis() - lastHelloMs >= HUNT_HEARTBEAT_INTERVAL_MS) {
+    lastHelloMs = millis();
+    networkService.sendHello("BASE", FIRMWARE_VERSION, roleManager.getRoleName());
+  }
 }
 
-void sendHeartbeatIfDue() {
-  if (millis() - lastHeartbeatMs >= HUNT_HEARTBEAT_INTERVAL_MS) {
-    lastHeartbeatMs = millis();
-    String packet = huntBuildPacket("HEARTBEAT", DEVICE_ID, "ALL", "ROLE:" + roleManager.getRoleName());
-    huntEspNowSendBroadcast(packet);
+void processAlphaEvents() {
+  while (huntKernel.events()->available()) {
+    HuntEvent event = huntKernel.events()->read();
+    huntLog("Event: " + event.name + " from " + event.source + " data " + event.data);
   }
 }
 
@@ -195,31 +164,29 @@ void setup() {
 
   lastEncoderClk = digitalRead(ENCODER_CLK_PIN);
   roleManager.begin(ROLE_SAFE_ZONE);
+  nodeRegistry.begin();
 
-  statusPixels.begin();
-  decorPixels.begin();
-  applyRoleLighting();
+  huntKernel.services()->registerService(&networkService);
+  huntKernel.services()->registerService(&sceneService);
+  huntKernel.services()->registerService(&lightingService);
+  huntKernel.services()->registerService(&soundService);
+  huntKernel.services()->registerService(&webService);
 
-  huntLog("Booting Base Node");
-  runProtocolSelfTest();
+  huntKernel.begin();
+  lightingService.setRole(roleManager.getRole());
+  soundService.playTrack(1);
+  networkService.sendHello("BASE", FIRMWARE_VERSION, roleManager.getRoleName());
 
-  if (!huntEspNowBegin()) {
-    huntLog("ESP-NOW failed to start");
-    statusPixels.showError();
-    decorPixels.showError();
-  }
-
-  sendHello();
   printBaseScreen();
-  huntLog("Base Node ready");
+  huntLog("Base Alpha ready");
 }
 
 void loop() {
   handleEncoder();
   handleButtons();
-  handleIncomingPackets();
+  huntKernel.update();
+  nodeRegistry.update();
   updateStatusLed();
-  statusPixels.update();
-  decorPixels.update();
-  sendHeartbeatIfDue();
+  sendHelloIfDue();
+  processAlphaEvents();
 }
