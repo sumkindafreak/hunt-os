@@ -1,7 +1,7 @@
 /*
   HUNT Base Node v0.1
   Bootable ESP32-S3 Base firmware spine with ESP-NOW, HUNT protocol,
-  shared Role Manager and NeoPixel role/status feedback.
+  shared Role Manager, NeoPixel status ring and decor/expansion NeoPixel output.
 
   Required libraries:
   - Arduino core for ESP32
@@ -25,7 +25,12 @@
 #include "../shared/HuntNeoPixels.cpp"
 
 HuntRoleManager roleManager;
-HuntNeoPixelManager neoPixels(BASE_NEOPIXEL_PIN, BASE_NEOPIXEL_COUNT, BASE_NEOPIXEL_BRIGHTNESS);
+
+// Status ring: communicates what the Base is doing.
+HuntNeoPixelManager statusPixels(BASE_NEOPIXEL_PIN, BASE_NEOPIXEL_COUNT, BASE_NEOPIXEL_BRIGHTNESS);
+
+// Decor strip: used for atmosphere, prop lighting and expansion effects.
+HuntNeoPixelManager decorPixels(DECOR_NEOPIXEL_PIN, DECOR_NEOPIXEL_COUNT, DECOR_NEOPIXEL_BRIGHTNESS);
 
 unsigned long lastHeartbeatMs = 0;
 unsigned long lastStatusBlinkMs = 0;
@@ -45,15 +50,24 @@ void printBaseScreen() {
   Serial.println(FIRMWARE_VERSION);
   Serial.print("Role: ");
   Serial.println(roleManager.getRoleName());
-  Serial.print("NeoPixels: ");
+  Serial.print("Status NeoPixels: ");
   Serial.print(BASE_NEOPIXEL_COUNT);
   Serial.print(" on pin ");
   Serial.println(BASE_NEOPIXEL_PIN);
+  Serial.print("Decor NeoPixels: ");
+  Serial.print(DECOR_NEOPIXEL_COUNT);
+  Serial.print(" on pin ");
+  Serial.println(DECOR_NEOPIXEL_PIN);
   Serial.println("Rotate encoder to change role");
   Serial.println("Encoder press = confirm role");
   Serial.println("Back button = print screen");
   Serial.println("Action button = send role event");
   Serial.println("-------------------------");
+}
+
+void applyRoleLighting() {
+  statusPixels.setRoleColour(roleManager.getRole());
+  decorPixels.setRoleColour(roleManager.getRole());
 }
 
 void handleEncoder() {
@@ -66,7 +80,7 @@ void handleEncoder() {
     else roleManager.previousRole();
 
     huntLog("Role changed to " + roleManager.getRoleName());
-    neoPixels.setRoleColour(roleManager.getRole());
+    applyRoleLighting();
     printBaseScreen();
   }
 
@@ -83,7 +97,8 @@ void sendRoleEventToPlayer() {
   String payload = "EVENT:" + event.name + ";DATA:" + event.data + ";ROLE:" + roleManager.getRoleName();
   String packet = huntBuildPacket("EVENT", DEVICE_ID, "PLAYER_01", payload);
   huntEspNowSendBroadcast(packet);
-  neoPixels.flashActivation();
+  statusPixels.flashActivation();
+  decorPixels.flashActivation();
 }
 
 void handleIncomingPackets() {
@@ -105,7 +120,7 @@ void handleIncomingPackets() {
 
   if (packet.type == "ACK") {
     huntLog("ACK received: " + packet.payload);
-    neoPixels.flashActivation();
+    statusPixels.flashActivation();
   } else if (packet.type == "HELLO") {
     huntLog("HELLO received: " + packet.payload);
   } else if (packet.type == "HEARTBEAT") {
@@ -135,7 +150,8 @@ void handleButtons() {
   if (encoderReading == LOW && lastEncoderButton == HIGH) {
     lastButtonChangeMs = millis();
     huntLog("Encoder button pressed - role confirmed: " + roleManager.getRoleName());
-    neoPixels.flashActivation();
+    statusPixels.flashActivation();
+    decorPixels.flashActivation();
     sendHello();
   }
 
@@ -179,15 +195,18 @@ void setup() {
 
   lastEncoderClk = digitalRead(ENCODER_CLK_PIN);
   roleManager.begin(ROLE_SAFE_ZONE);
-  neoPixels.begin();
-  neoPixels.setRoleColour(roleManager.getRole());
+
+  statusPixels.begin();
+  decorPixels.begin();
+  applyRoleLighting();
 
   huntLog("Booting Base Node");
   runProtocolSelfTest();
 
   if (!huntEspNowBegin()) {
     huntLog("ESP-NOW failed to start");
-    neoPixels.showError();
+    statusPixels.showError();
+    decorPixels.showError();
   }
 
   sendHello();
@@ -200,6 +219,7 @@ void loop() {
   handleButtons();
   handleIncomingPackets();
   updateStatusLed();
-  neoPixels.update();
+  statusPixels.update();
+  decorPixels.update();
   sendHeartbeatIfDue();
 }
