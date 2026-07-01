@@ -2,7 +2,8 @@
 
 **Version:** v0.1  
 **Role:** HUNT Player Node / lightweight expansion node  
-**Status:** Prototype target
+**Status:** Prototype target  
+**Reference:** Original HUNT / ZombieTag badge firmware
 
 ---
 
@@ -22,32 +23,46 @@ It includes:
 
 ---
 
-## Confirmed From Board Diagram
+## Important Note
 
-### I2C OLED Pins
+The printed board diagram suggested OLED I2C on GPIO8/GPIO9, but the original working HUNT reference firmware used GPIO5/GPIO6.
 
-- GPIO8 = I2C SDA
-- GPIO9 = I2C SCL
+For next-gen HUNT, the working reference takes priority until hardware testing proves otherwise.
 
-### Serial Pins
+---
 
-- GPIO20 = RX
-- GPIO21 = TX
+## Working Reference Pin Map
 
-### ADC-labelled Pins
+### OLED
 
-- GPIO0 = A0
-- GPIO1 = A1
-- GPIO2 = A2
-- GPIO3 = A3
-- GPIO4 = A4
-- GPIO5 = A5
+- SDA: GPIO5
+- SCL: GPIO6
+- Address: 0x3C
+- I2C speed: 400kHz
+- Width: 128
+- Height: 64
+- Visible X offset: 28
+- Visible Y offset: 24
+- Driver reference: SSD1306-style path in old badge build
 
-### SPI-labelled Pins
+### Button
 
-- GPIO5 = MISO
-- GPIO6 = MOSI
-- GPIO7 = SS
+- Main button: GPIO9
+- Debounce: 45ms
+- Long press: 650ms
+
+### Buzzer / Haptics
+
+- Buzzer: GPIO10
+- Rumble motor: GPIO4
+
+### RGB LED
+
+- Red: GPIO7
+- Green: GPIO8
+- Blue: GPIO3
+- Common anode: false
+- Suggested brightness cap: 96 / 255
 
 ---
 
@@ -58,30 +73,20 @@ Recommended Player Node hardware:
 - Onboard OLED for player status
 - One external game button
 - Small buzzer
+- Optional rumble motor
 - RGB LED or single NeoPixel
 - Battery power
 - ESP-NOW communication
 
 ---
 
-## Notes
-
-The onboard OLED driver is not yet confirmed in firmware.
-
-Likely candidates:
-
-- SSD1306
-- SH1106
-
-The display driver must be confirmed with a test sketch before final firmware lock-in.
-
----
-
 ## Design Rule
 
-The Player Node should remain simple.
+This reference firmware should not be merged into next-gen HUNT.
 
-The display should show only the information a player needs during play:
+It is only used to confirm hardware behaviour, pins and working display assumptions.
+
+The Player Node should remain simple and show only the information a player needs during play:
 
 - ID
 - Team
